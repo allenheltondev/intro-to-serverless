@@ -1,0 +1,378 @@
+openapi: 3.0.0
+info:
+  title: Intro to Serverless API
+  description: |
+    This intro to serverless API registers talks for your podcast/show/vlog
+  version: 1.0.0
+
+x-amazon-apigateway-request-validators:
+  Validate All:
+    validateRequestParameters: true
+    validateRequestBody: true
+x-amazon-apigateway-gateway-responses:
+  BAD_REQUEST_BODY:
+    statusCode: 400
+    responseTemplates:
+      application/json: '{ "message": "$context.error.validationErrorString" }'
+  INVALID_API_KEY:
+    statusCode: 401
+    responseTemplates:
+      application/json: '{ "message": "Unauthorized" }'
+
+security:
+  - api_key: []
+
+paths:
+  /episodes:
+    post:
+      summary: Add a new episode to your show
+      description: Whenever you have a new episode for your show, you can create one with this endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Episode'
+      responses:
+        201:
+          $ref: '#/components/responses/Created'
+        400:
+          $ref: '#/components/responses/BadRequest'
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        credentials:
+          Fn::Sub: ${AddEpisodeRole.Arn}
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:states:action/StartSyncExecution
+        httpMethod: POST
+        type: aws
+        requestTemplates:
+          application/json:
+            Fn::Sub:  
+              - |-
+                #set($context.responseOverride.header.Access-Control-Allow-Origin = '*')
+                #set($body = "{""detail"" : $input.json('$')}")
+                {
+                    "input": "$util.escapeJavaScript($body)",
+                    "stateMachineArn": "${StateMachine}"
+                }
+              - { StateMachine: { "Ref": "AddEpisodeStateMachine" }}
+        responses:
+          200:
+            statusCode: 201
+            responseTemplates:
+              application/json: |
+                #set($context.responseOverride.header.Access-Control-Allow-Origin = '*')
+                #set($inputRoot = $input.path('$'))
+                #set($output = $util.parseJson($input.path('$.output')))
+                {
+                  #if("$output.id" != "")
+                    "id": "$output.id"
+                  #end
+                  #if("$inputRoot.error" == "EpisodeNumberExists")
+                    #set($context.responseOverride.status = 400)
+                    "message": "$inputRoot.cause"
+                  #end
+                  #if("$inputRoot.error" == "UnhandledError")
+                    #set($context.responseOverride.status = 500)
+                    "message": "$inputRoot.cause"
+                  #end                  
+                }
+    get:
+      summary: Retrieve a list of episodes
+      description: Returns a paginated list of episodes
+      responses:
+        200:
+          description: The request was successful and a list of episodes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeList'
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        credentials:
+          Fn::Sub: ${GetEpisodesRole.Arn}
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:dynamodb:action/Query
+        httpMethod: POST
+        type: aws
+        passthroughBehavior: never
+        requestTemplates:
+          application/json:
+            Fn::Sub:
+              - |-
+                {
+                  "TableName": "${TableName}",
+                  "IndexName": "GSI1",
+                  "KeyConditionExpression": "#GSI1PK = :GSI1PK",
+                  "ExpressionAttributeNames": {
+                    "#GSI1PK": "GSI1PK"
+                  },
+                  "ExpressionAttributeValues": {
+                    ":GSI1PK": { "S": "episode#" }
+                  }
+                }
+              - { TableName: { Ref: TableName } }
+        responses:
+          200:
+            statusCode: 200
+            responseTemplates:
+              application/json: |
+                #set($context.reponseOverride.header.Access-Control-Allow-Origin = '*')
+                #set($inputRoot = $input.path('$'))
+                {
+                  "items": [
+                    #foreach($elem in $inputRoot.Items) {
+                      "id": "$elem.pk.S",
+                      "name": "$elem.name.S",
+                      "episodeNumber": "$elem.episodeNumber.N",
+                      "isPublished": "$elem.isPublished.BOOL"
+                      #if("$elem.recordedDate.S" != ""),
+                        "recordedDate": "$elem.recordedDate.S"
+                      #end
+                    }#if($foreach.hasNext),#end
+                    #end
+                  ]
+                }
+
+  /episodes/{episodeId}:
+    parameters:
+      - $ref: '#/components/parameters/episodeId'
+    patch:
+      summary: Update the details of an episode
+      description: Updates only the provided details of a given episode      
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchEpisode'
+      responses:
+        204:
+          $ref: '#/components/responses/NoContent'
+        400:
+          $ref: '#/components/responses/BadRequest'
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatchEpisodeFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+    put:
+      summary: Update all details of an episode
+      description: Updates all the details of an episode with the provided information
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Episode'
+      responses:
+        204:
+          $ref: '#/components/responses/NoContent'
+        400:
+          $ref: '#/components/responses/BadRequest'
+      x-amazon-apigateway-request-validator: Validate All
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PutEpisodeFunction.Arn}/invocations
+        httpMethod: POST
+        type: aws_proxy
+  
+components:
+  securitySchemes:
+    api_key:
+      type: apiKey
+      name: x-api-key
+      in: header
+
+  parameters:
+    episodeId:
+      name: episodeId
+      in: path
+      description: Unique identifier for a episode
+      required: true
+      schema:
+        type: string
+        example: 01G8V9ERMKHR87X2P05VJJ5WQP      
+    
+  schemas:
+    Episode:
+      description: Details of a specific episode
+      type: object
+      required:
+        - name
+        - episodeNumber
+      properties:
+        name:
+          type: string
+          minLength: 10
+          description: Name of the episode
+          example: Introduction to serverless
+        episodeNumber:
+          type: integer          
+          description: Episode number
+          example: 1
+        recordedDate:
+          type: string
+          format: date
+          description: The date of the recording
+          example: 2022-07-04
+        description:
+          type: string
+          description: Detailed information about the episode
+          example: In this episode, we meet with Allen Helton to discuss serverless
+        isPublished:
+          type: boolean
+          description: Notes if the episode is published 
+          example: true
+        guest:
+          type: object
+          required:
+              - name
+              - bio
+          properties:
+            name:
+              type: string
+              description: First and last name of the person on the show
+              example: Allen Helton
+            bio:
+              type: string
+              description: Short bio for the person
+              example: Allen is a serverless cloud architect
+            twitter:
+              type: string
+              description: Twitter handle 
+              example: "@allenheltondev"
+
+    EpisodeList:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - name
+              - episodeNumber
+            properties:
+              id:
+                type: string
+                description: Unique identifier of the episode
+                example: 01G8V9GN1C54MKW61XDCWRX45N
+              name: 
+                type: string
+                description: Title of the episode
+                example: Intro to serverless
+              episodeNumber:
+                type: integer
+                description: Episode number
+                example: 1
+              isPublished: 
+                type: boolean
+                description: Indicates if the episode has been published
+                example: false
+              recordedDate: 
+                type: string
+                format: date
+                description: Date the episode was recorded
+                example: 2022-07-04
+
+    PatchEpisode:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 10
+          description: Name of the episode
+          example: Introduction to serverless
+        episodeNumber:
+          type: integer          
+          description: Episode number
+          example: 1
+        recordedDate:
+          type: string
+          format: date
+          description: The date of the recording
+          example: 2022-07-04
+        description:
+          type: string
+          description: Detailed information about the episode
+          example: In this episode, we meet with Allen Helton to discuss serverless
+        guest:
+          type: object
+          required:
+              - name
+              - bio
+          properties:
+            name:
+              type: string
+              description: First and last name of the person on the show
+              example: Allen Helton
+            bio:
+              type: string
+              description: Short bio for the person
+              example: Allen is a serverless cloud architect
+            twitter:
+              type: string
+              description: Twitter handle 
+              example: "@allenheltondev"
+
+  responses:
+    Created:
+      description: Successfully added into the system
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - id
+            properties:
+              id:
+                type: string
+                description: The identifier for the new entity
+                example: 01G8V9PQQTNCG2C2M1E01VJ10D
+    BadRequest:
+      description: Unable to process request. Likely due to improperly formatted request.
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+                description: Message detailing what went wrong
+                example: The 'name' field is required and is missing.
+    NotFound:
+      description: Unable to find entity with a given identifier
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+                description: Message stating the entity was not found
+                example: Unable to find entity with the provided id
+    UnknownError:
+      description: An unexpected error occurred on the server.
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+                description: Unknown error message
+                example: An unexpected error occurred.
+    NoContent:
+      description: A blank response is returned indicating success

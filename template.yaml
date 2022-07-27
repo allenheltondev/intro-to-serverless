@@ -1,0 +1,265 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+ Intro to Serverless
+ Create an API for managing a podcast, video channel, or vlog
+
+Parameters:
+  TableName:
+    Type: String
+    Default: episode
+  GSI1:
+    Type: String
+    Default: GSI1
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+Globals:
+  Function:
+    Runtime: nodejs16.x
+    Architectures:
+      - arm64
+    Tracing: Active
+    Timeout: 3
+    Handler: index.handler
+    Layers:
+      - !Ref DependencyLayer
+    Environment:
+      Variables:
+        AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+        TABLE_NAME: !Ref TableName
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,PATCH'"
+      AllowHeaders: "'Content-Type,x-api-key'"
+      AllowOrigin: "'*'"
+
+Resources:
+  DependencyLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata:
+      BuildMethod: nodejs16.x
+    Properties:
+      LayerName: episode-dependency-layer
+      ContentUri: layers/
+      CompatibleRuntimes:
+        - nodejs16.x
+
+  EpisodeApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      TracingEnabled: false
+      StageName: !Ref Stage
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: ./openapi.yaml
+
+  GetEpisodesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: GetEpisodesPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Query
+                Resource: 
+                  - !Join [ "/", [ !GetAtt EpisodeTable.Arn, "index", !Ref GSI1 ]]
+
+  PatchEpisodeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/patch-episode/
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt EpisodeTable.Arn
+      Events:
+        PatchEpisodeEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref EpisodeApi
+            Path: /episodes/{episodeId}
+            Method: PATCH
+
+  PutEpisodeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/put-episode/
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt EpisodeTable.Arn
+      Events:
+        PutEpisodeEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref EpisodeApi
+            Path: /episodes/{episodeId}
+            Method: PUT
+
+  CreateEpisodeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/create-episode/
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt EpisodeTable.Arn
+
+  EpisodeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST      
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      GlobalSecondaryIndexes:
+        - IndexName: !Ref GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  NewEpisodeTopic:
+    Type: AWS::SNS::Topic
+
+  AddEpisodeStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: EXPRESS
+      DefinitionUri: workflows/add-episode.asl.json
+      DefinitionSubstitutions:
+        DynamoDbQuery: !Sub arn:${AWS::Partition}:states:::aws-sdk:dynamodb:query
+        LambdaInvoke: !Sub arn:${AWS::Partition}:states:::lambda:invoke
+        SnsPublish: !Sub arn:${AWS::Partition}:states:::sns:publish
+        CreateEpisodeFunction: !GetAtt CreateEpisodeFunction.Arn
+        NewEpisodeTopic: !Ref NewEpisodeTopic
+        TableName: !Ref TableName
+        EpisodeIndex: !Ref GSI1
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: 
+                - !Join [ "/", [ !GetAtt EpisodeTable.Arn, "index", !Ref GSI1 ]]
+            - Effect: Allow
+              Action: 
+                - lambda:InvokeFunction
+              Resource:
+                - !GetAtt CreateEpisodeFunction.Arn
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref NewEpisodeTopic
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt AddEpisodeLogGroup.Arn
+
+  AddEpisodeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+
+  AddEpisodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole      
+      Policies:
+        - PolicyName: AddEpisodePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartSyncExecution
+                Resource: !Ref AddEpisodeStateMachine
+
+Outputs:
+  APIBaseUrl: 
+    Description: Url of API created from this stack
+    Value: !Join ['', ['https://', !Ref EpisodeApi, '.execute-api.', !Ref AWS::Region, '.amazonaws.com/', !Ref Stage]]
+  ApiId:
+    Description: The id of the API used in the api-key-registration microservice
+    Value: !Ref EpisodeApi
+  ApiStageName:
+    Description: The name of the stage used in the api-key-registration microservice
+    Value: !Ref Stage
+  DynamoTableName:
+    Description: The name of the database table used in teh api-key-registration microservice
+    Value: !Ref TableName
+  ApiKeyRegistrationRepo:
+    Description: To create an API key for this deployment, deploy the stack in this repo with the parameters from above
+    Value: https://github.com/allenheltondev/serverless-api-key-registration
+  

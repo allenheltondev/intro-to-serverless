@@ -1,0 +1,9 @@
+{
+  "name": "intro-to-serverless",
+  "version": "1.0.0",
+  "description": "This is an example application to introduce serverless to a general audience. It deploys an API for podcast episode management",
+  "scripts": {
+    "diagram": "cfn-dia draw.io -t template.yaml -o diagrams/diagram.drawio -c && drawio diagrams/diagram.drawio -o diagrams/diagram.png"
+  },
+  "license": "MIT"
+}

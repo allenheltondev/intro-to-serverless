@@ -1,0 +1,14 @@
+{
+  "name": "patch-episode",
+  "version": "1.0.0",
+  "description": "Update a subset of the information for an episode",
+  "author": "allenheltondev",
+  "private": true,
+  "license": "MIT",
+  "repository": "https://github.com/allenheltondev/intro-to-serverless",
+  "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.131.0",
+    "@aws-sdk/util-dynamodb": "^3.131.0",
+    "http-status-codes": "^2.2.0"
+  }
+}

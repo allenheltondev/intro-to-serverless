@@ -1,0 +1,147 @@
+{
+  "StartAt": "Get Episode With Provided EpisodeNumber",
+  "States": {
+    "Get Episode With Provided EpisodeNumber": {
+      "Type": "Task",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "IndexName": "${EpisodeIndex}",
+        "KeyConditionExpression": "#GSI1PK = :GSI1PK and #GSI1SK = :GSI1SK",
+        "ExpressionAttributeNames": {
+          "#GSI1PK": "GSI1PK",
+          "#GSI1SK": "GSI1SK"
+        },
+        "ExpressionAttributeValues": {
+          ":GSI1PK": {
+            "S": "episode#"
+          },
+          ":GSI1SK": {
+            "S.$": "States.Format('{}', $.detail.episodeNumber)"
+          }
+        }
+      },
+      "Resource": "${DynamoDbQuery}",
+      "ResultPath": "$.existingItem",
+      "Next": "Does Episode Already Exist?",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Unhandled Exception"
+        }
+      ]
+    },
+    "Does Episode Already Exist?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.existingItem.Count",
+          "NumericGreaterThan": 0,
+          "Next": "Episode Already Exists"
+        }
+      ],
+      "Default": "Save Episode"
+    },
+    "Save Episode": {
+      "Type": "Task",
+      "Resource": "${LambdaInvoke}",
+      "Parameters": {
+        "FunctionName": "${CreateEpisodeFunction}",
+        "Payload": {
+          "data.$": "$"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Is the episode published?",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Unhandled Exception"
+        }
+      ],
+      "ResultPath": "$.episode",
+      "ResultSelector": {
+        "id.$": "$.Payload.id"
+      }
+    },
+    "Is the episode published?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.detail.isPublished",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.detail.isPublished",
+              "IsBoolean": true
+            },
+            {
+              "Variable": "$.detail.isPublished",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Notify Subscribers of New Episode"
+        }
+      ],
+      "Default": "Return id"
+    },
+    "Notify Subscribers of New Episode": {
+      "Type": "Task",
+      "Resource": "${SnsPublish}",
+      "Parameters": {
+        "TopicArn": "${NewEpisodeTopic}",
+        "Message": {
+          "id.$": "$.episode.id",
+          "name.$": "$.detail.name",
+          "episodeNumber.$": "$.detail.episodeNumber"
+        }
+      },
+      "Next": "Return id",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Unhandled Exception"
+        }
+      ],
+      "ResultPath": null
+    },
+    "Unhandled Exception": {
+      "Type": "Fail",
+      "Error": "UnhandledError",
+      "Cause": "Something went wrong."
+    },
+    "Return id": {
+      "Type": "Pass",
+      "Next": "Successfully Created Episode",
+      "Parameters": {
+        "id.$": "$.episode.id"
+      }
+    },
+    "Episode Already Exists": {
+      "Type": "Fail",
+      "Error": "EpisodeNumberExists",
+      "Cause": "There is already an episode with the provided episode number"
+    },
+    "Successfully Created Episode": {
+      "Type": "Succeed"
+    }
+  }
+}
