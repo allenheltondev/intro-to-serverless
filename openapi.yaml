@@ -125,8 +125,8 @@ paths:
                     #foreach($elem in $inputRoot.Items) {
                       "id": "$elem.pk.S",
                       "name": "$elem.name.S",
-                      "episodeNumber": "$elem.episodeNumber.N",
-                      "isPublished": "$elem.isPublished.BOOL"
+                      "episodeNumber": $elem.episodeNumber.N,
+                      "isPublished": $elem.isPublished.BOOL
                       #if("$elem.recordedDate.S" != ""),
                         "recordedDate": "$elem.recordedDate.S"
                       #end

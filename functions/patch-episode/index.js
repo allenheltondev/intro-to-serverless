@@ -48,7 +48,7 @@ exports.buildUpdateEpisodeCommand = (episodeId, input) => {
     }),
     ConditionExpression: 'attribute_exists(#pk)',
     ExpressionAttributeNames: {
-      '#pk': 'pk'      
+      '#pk': 'pk'
     },
     ExpressionAttributeValues: {}
   };
@@ -59,7 +59,7 @@ exports.buildUpdateEpisodeCommand = (episodeId, input) => {
     params.ExpressionAttributeNames[`#${key}`] = key;
     params.ExpressionAttributeValues[`:${key}`] = value;
 
-    if(key == 'episodeNumber'){
+    if (key == 'episodeNumber') {
       params.ExpressionAttributeNames['#GSI1SK'] = 'GSI1SK';
       params.ExpressionAttributeValues[':GSI1SK'] = `${value}`;
       updateExpression = `${updateExpression} #GSI1SK = :GSI1SK,`;

@@ -49,7 +49,7 @@
       "Parameters": {
         "FunctionName": "${CreateEpisodeFunction}",
         "Payload": {
-          "data.$": "$"
+          "data.$": "$.detail"
         }
       },
       "Retry": [
