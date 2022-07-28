@@ -33,7 +33,7 @@ This will deploy the resources via CloudFormation to your personal account (or w
 
 Once you have successfully deployed the stack, you will have the following resources in your AWS account. Don't worry, all of these resources are pay-for-what-you-use, so you will not be charged for having them in your account unused.
 
-![Infrastructure diagram](./diagrams/diagram.png)
+![Infrastructure diagram](./diagrams/infrastructure%20diagram.png)
 
 ## How Do I Use This?
 
